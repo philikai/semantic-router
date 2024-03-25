@@ -3,6 +3,7 @@ import json
 import asyncio
 import numpy as np
 import boto3
+import time
 from typing import List, Optional, Union, Any
 from semantic_router.encoders import BaseEncoder
 from semantic_router.utils.defaults import EncoderDefault
@@ -26,7 +27,7 @@ class BedrockEncoder(BaseEncoder):
         model_id: Optional[str] = None,
         endpoint_url: Optional[str] = None,
         normalize: bool = False,
-        score_threshold: float = 0.82,
+        score_threshold: float = 0.3,
     ):
         if name is None:
             name = "amazon.titan-embed-text-v1"  # Set the default name directly
@@ -48,14 +49,28 @@ class BedrockEncoder(BaseEncoder):
     def _embedding_func(self, text: str) -> List[float]:
         text = text.replace(os.linesep, " ")
         input_body = {"inputText": text}
-        response = self.client.invoke_model(
-            body=json.dumps(input_body),
-            modelId=self.model_id,
-            accept="application/json",
-            contentType="application/json",
-        )
-        response_body = json.loads(response.get("body").read())
-        return response_body.get("embedding")
+
+        max_retries = 3
+        backoff_factor = 2
+
+        for attempt in range(max_retries):
+            try:
+                response = self.client.invoke_model(
+                    body=json.dumps(input_body),
+                    modelId=self.model_id,
+                    accept="application/json",
+                    contentType="application/json",
+                )
+                response_body = json.loads(response.get("body").read())
+                return response_body.get("embedding")
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    sleep_time = backoff_factor**attempt
+                    logger.warning(f"Retrying in {sleep_time} seconds... ({e})")
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(f"Max retries exceeded. Error: {e}")
+                    raise
 
     def _normalize_vector(self, embeddings: List[float]) -> List[float]:
         emb = np.array(embeddings)
